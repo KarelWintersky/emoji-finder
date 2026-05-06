@@ -7,6 +7,8 @@ namespace Arris\Toolkit\EmojiFinder\Utils\NLP;
  *
  * Based on Snowball stemming algorithm
  * Reference: https://snowballstem.org/texts/introduction.html
+ *
+ * This is a PHP port of the original Snowball English stemmer.
  */
 final class StemWord
 {
@@ -53,244 +55,474 @@ final class StemWord
 
     /**
      * Porter Stemmer implementation
+     * This is a direct port from the Snowball C implementation
      */
     private static function porterStem(string $word): string
     {
-        // Step 1a
+        if (strlen($word) <= 2) {
+            return $word;
+        }
+
         $word = self::step1a($word);
-
-        // Step 1b
         $word = self::step1b($word);
-
-        // Step 1c
         $word = self::step1c($word);
-
-        // Step 2
         $word = self::step2($word);
-
-        // Step 3
         $word = self::step3($word);
-
-        // Step 4
         $word = self::step4($word);
-
-        // Step 5
-        $word = self::step5($word);
+        $word = self::step5a($word);
+        $word = self::step5b($word);
 
         return $word;
     }
 
-    private static function isVowel(string $char): bool
+    /**
+     * Checks if a letter is a consonant
+     */
+    private static function isConsonant(string $word, int $index): bool
     {
-        return in_array($char, ['a', 'e', 'i', 'o', 'u']);
+        $letter = $word[$index];
+
+        if ($letter === 'a' || $letter === 'e' || $letter === 'i' ||
+            $letter === 'o' || $letter === 'u') {
+            return false;
+        }
+
+        if ($letter === 'y') {
+            return $index === 0 || !self::isConsonant($word, $index - 1);
+        }
+
+        return true;
     }
 
-    private static function isConsonant(string $char): bool
-    {
-        return !self::isVowel($char) && ctype_alpha($char);
-    }
-
-    private static function measure(string $word): int
+    /**
+     * Counts the number of VC sequences (measure)
+     */
+    private static function measureWord(string $word): int
     {
         $measure = 0;
-        $vowel = false;
-        $len = mb_strlen($word);
+        $len = strlen($word);
+
+        if ($len < 2) {
+            return 0;
+        }
+
+        $prevVowel = false;
 
         for ($i = 0; $i < $len; $i++) {
-            if (self::isVowel($word[$i])) {
-                $vowel = true;
-            } elseif ($vowel) {
+            $isVowel = !self::isConsonant($word, $i);
+
+            if ($isVowel && !$prevVowel) {
+                // Start of vowel sequence
+            } elseif (!$isVowel && $prevVowel) {
                 $measure++;
-                $vowel = false;
             }
+
+            $prevVowel = $isVowel;
         }
 
         return $measure;
     }
 
-    private static function containsVowel(string $word): bool
+    /**
+     * Checks if word contains a vowel
+     */
+    private static function hasVowel(string $word): bool
     {
-        $len = mb_strlen($word);
+        $len = strlen($word);
         for ($i = 0; $i < $len; $i++) {
-            if (self::isVowel($word[$i])) {
+            if (!self::isConsonant($word, $i)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static function cvc(string $word): bool
+    /**
+     * Checks if word ends in double consonant
+     */
+    private static function endsDoubleConsonant(string $word): bool
     {
-        $len = mb_strlen($word);
-        if ($len < 3) {
-            return false;
-        }
-
-        $last3 = mb_substr($word, -3);
-        if (
-            self::isConsonant($last3[0]) &&
-            self::isVowel($last3[1]) &&
-            self::isConsonant($last3[2]) &&
-            !in_array($last3[2], ['w', 'x', 'y'])
-        ) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static function doubleConsonant(string $word): bool
-    {
-        $len = mb_strlen($word);
+        $len = strlen($word);
         if ($len < 2) {
             return false;
         }
 
-        $last2 = mb_substr($word, -2);
-        return $last2[0] === $last2[1] && self::isConsonant($last2[0]);
+        $last = $word[$len - 1];
+        $prev = $word[$len - 2];
+
+        return $last === $prev && self::isConsonant($word, $len - 1);
     }
 
+    /**
+     * Checks if word ends in cvc pattern
+     */
+    private static function endsCvc(string $word): bool
+    {
+        $len = strlen($word);
+        if ($len < 3) {
+            return false;
+        }
+
+        $c1 = self::isConsonant($word, $len - 3);
+        $v1 = !self::isConsonant($word, $len - 2);
+        $c2 = self::isConsonant($word, $len - 1);
+
+        $last = $word[$len - 1];
+
+        return $c1 && $v1 && $c2 && $last !== 'w' && $last !== 'x' && $last !== 'y';
+    }
+
+    /**
+     * Replaces suffix if measure > 0
+     */
+    private static function replaceSuffix(string $word, string $suffix, string $replacement): string
+    {
+        if (str_ends_with($word, $suffix)) {
+            $stem = substr($word, 0, -strlen($suffix));
+            if (self::measureWord($stem) > 0) {
+                return $stem . $replacement;
+            }
+        }
+        return $word;
+    }
+
+    /**
+     * Step 1a: Handle plurals and -ed/-ing
+     */
     private static function step1a(string $word): string
     {
+        // SSES -> SS
         if (str_ends_with($word, 'sses')) {
-            return mb_substr($word, 0, -2);
+            return substr($word, 0, -2);
         }
+
+        // IES -> I
         if (str_ends_with($word, 'ies')) {
-            return mb_substr($word, 0, -2);
+            return substr($word, 0, -2);
         }
+
+        // SS -> SS (do nothing)
         if (str_ends_with($word, 'ss')) {
             return $word;
         }
+
+        // S -> (remove)
         if (str_ends_with($word, 's')) {
-            return mb_substr($word, 0, -1);
+            return substr($word, 0, -1);
         }
+
         return $word;
     }
 
+    /**
+     * Step 1b: Handle -ed and -ing
+     */
     private static function step1b(string $word): string
     {
-        $original = $word;
+        $hasEd = str_ends_with($word, 'ed');
+        $hasIng = str_ends_with($word, 'ing');
 
-        if (str_ends_with($word, 'eed')) {
-            if (self::measure(mb_substr($word, 0, -3)) > 0) {
-                return mb_substr($word, 0, -1);
-            }
+        if (!$hasEd && !$hasIng) {
             return $word;
         }
 
-        if (str_ends_with($word, 'ed')) {
-            $stem = mb_substr($word, 0, -2);
-            if (self::containsVowel($stem)) {
-                $word = $stem;
-            }
-        } elseif (str_ends_with($word, 'ing')) {
-            $stem = mb_substr($word, 0, -3);
-            if (self::containsVowel($stem)) {
-                $word = $stem;
+        $suffixLen = $hasEd ? 2 : 3;
+        $stem = substr($word, 0, -$suffixLen);
+
+        if (!self::hasVowel($stem)) {
+            return $word;
+        }
+
+        $word = $stem;
+
+        // AT, BL, IZ -> add E
+        if (str_ends_with($word, 'at') ||
+            str_ends_with($word, 'bl') ||
+            str_ends_with($word, 'iz')) {
+            return $word . 'e';
+        }
+
+        // Double consonant (not L, S, Z) -> remove last
+        if (self::endsDoubleConsonant($word)) {
+            $last = $word[strlen($word) - 1];
+            if ($last !== 'l' && $last !== 's' && $last !== 'z') {
+                return substr($word, 0, -1);
             }
         }
 
-        if ($word !== $original) {
-            if (str_ends_with($word, 'at') || str_ends_with($word, 'bl') || str_ends_with($word, 'iz')) {
-                return $word . 'e';
-            }
-            if (self::doubleConsonant($word) && !in_array(mb_substr($word, -1), ['l', 's', 'z'])) {
-                return mb_substr($word, 0, -1);
-            }
-            if (self::measure($word) === 1 && self::cvc($word)) {
-                return $word . 'e';
-            }
+        // *o -> add E
+        if (self::measureWord($word) === 1 && self::endsCvc($word)) {
+            return $word . 'e';
         }
 
         return $word;
     }
 
+    /**
+     * Step 1c: Handle -y
+     */
     private static function step1c(string $word): string
     {
-        if (str_ends_with($word, 'y') && self::containsVowel(mb_substr($word, 0, -1))) {
-            return mb_substr($word, 0, -1) . 'i';
+        if (str_ends_with($word, 'y')) {
+            $stem = substr($word, 0, -1);
+            if (self::hasVowel($stem)) {
+                return $stem . 'i';
+            }
         }
         return $word;
     }
 
+    /**
+     * Step 2: Handle double suffixes
+     */
     private static function step2(string $word): string
     {
-        $patterns = [
-            'ational' => 'ate',
-            'tional' => 'tion',
-            'enci' => 'ence',
-            'anci' => 'ance',
-            'izer' => 'ize',
-            'abli' => 'able',
-            'alli' => 'al',
-            'entli' => 'ent',
-            'eli' => 'e',
-            'ousli' => 'ous',
-            'ization' => 'ize',
-            'ation' => 'ate',
-            'ator' => 'ate',
-            'alism' => 'al',
-            'iveness' => 'ive',
-            'fulness' => 'ful',
-            'ousness' => 'ous',
-            'aliti' => 'al',
-            'iviti' => 'ive',
-            'biliti' => 'ble',
-        ];
+        // ATIONAL -> ATE
+        $word = self::replaceSuffix($word, 'ational', 'ate');
 
-        foreach ($patterns as $suffix => $replacement) {
-            if (str_ends_with($word, $suffix)) {
-                $stem = mb_substr($word, 0, -strlen($suffix));
-                if (self::measure($stem) > 0) {
-                    return $stem . $replacement;
-                }
-            }
-        }
+        // TIONAL -> TION
+        $word = self::replaceSuffix($word, 'tional', 'tion');
+
+        // ENCI -> ENCE
+        $word = self::replaceSuffix($word, 'enci', 'ence');
+
+        // ANCI -> ANCE
+        $word = self::replaceSuffix($word, 'anci', 'ance');
+
+        // IZER -> IZE
+        $word = self::replaceSuffix($word, 'izer', 'ize');
+
+        // ABLI -> ABLE
+        $word = self::replaceSuffix($word, 'abli', 'able');
+
+        // ALLI -> AL
+        $word = self::replaceSuffix($word, 'alli', 'al');
+
+        // ENTLI -> ENT
+        $word = self::replaceSuffix($word, 'entli', 'ent');
+
+        // ELI -> E
+        $word = self::replaceSuffix($word, 'eli', 'e');
+
+        // OUSLI -> OUS
+        $word = self::replaceSuffix($word, 'ousli', 'ous');
+
+        // IZATION -> IZE
+        $word = self::replaceSuffix($word, 'ization', 'ize');
+
+        // ATION -> ATE
+        $word = self::replaceSuffix($word, 'ation', 'ate');
+
+        // ATOR -> ATE
+        $word = self::replaceSuffix($word, 'ator', 'ate');
+
+        // ALISM -> AL
+        $word = self::replaceSuffix($word, 'alism', 'al');
+
+        // IVENESS -> IVE
+        $word = self::replaceSuffix($word, 'iveness', 'ive');
+
+        // FULNESS -> FUL
+        $word = self::replaceSuffix($word, 'fulness', 'ful');
+
+        // OUSNESS -> OUS
+        $word = self::replaceSuffix($word, 'ousness', 'ous');
+
+        // ALITI -> AL
+        $word = self::replaceSuffix($word, 'aliti', 'al');
+
+        // IVITI -> IVE
+        $word = self::replaceSuffix($word, 'iviti', 'ive');
+
+        // BILITI -> BLE
+        $word = self::replaceSuffix($word, 'biliti', 'ble');
 
         return $word;
     }
 
+    /**
+     * Step 3: Handle -ic-, -full, -ness etc
+     */
     private static function step3(string $word): string
     {
-        $patterns = [
-            'icate' => 'ic',
-            'ative' => '',
-            'alize' => 'al',
-            'iciti' => 'ic',
-            'ical' => 'ic',
-            'ful' => '',
-            'ness' => '',
-        ];
+        // ICATE -> IC
+        $word = self::replaceSuffix($word, 'icate', 'ic');
 
-        foreach ($patterns as $suffix => $replacement) {
-            if (str_ends_with($word, $suffix)) {
-                $stem = mb_substr($word, 0, -strlen($suffix));
-                if (self::measure($stem) > 0) {
-                    return $stem . $replacement;
-                }
-            }
-        }
+        // ATIVE -> (null)
+        $word = self::replaceSuffix($word, 'ative', '');
+
+        // ALIZE -> AL
+        $word = self::replaceSuffix($word, 'alize', 'al');
+
+        // ICITI -> IC
+        $word = self::replaceSuffix($word, 'iciti', 'ic');
+
+        // ICAL -> IC
+        $word = self::replaceSuffix($word, 'ical', 'ic');
+
+        // FUL -> (null)
+        $word = self::replaceSuffix($word, 'ful', '');
+
+        // NESS -> (null)
+        $word = self::replaceSuffix($word, 'ness', '');
 
         return $word;
     }
 
+    /**
+     * Step 4: Handle -al, -ance, -ence etc
+     */
     private static function step4(string $word): string
     {
-        $suffixes = ['al', 'ance', 'ence', 'er', 'ic', 'able', 'ible', 'ant',
-            'ement', 'ment', 'ent', 'ou', 'ism', 'ate', 'iti', 'ous', 'ive', 'ize'];
-
-        foreach ($suffixes as $suffix) {
-            if (str_ends_with($word, $suffix)) {
-                $stem = mb_substr($word, 0, -strlen($suffix));
-                if (self::measure($stem) > 1) {
-                    return $stem;
-                }
+        // AL
+        if (str_ends_with($word, 'al')) {
+            $stem = substr($word, 0, -2);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
             }
         }
 
+        // ANCE
+        if (str_ends_with($word, 'ance')) {
+            $stem = substr($word, 0, -4);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ENCE
+        if (str_ends_with($word, 'ence')) {
+            $stem = substr($word, 0, -4);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ER
+        if (str_ends_with($word, 'er')) {
+            $stem = substr($word, 0, -2);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // IC
+        if (str_ends_with($word, 'ic')) {
+            $stem = substr($word, 0, -2);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ABLE
+        if (str_ends_with($word, 'able')) {
+            $stem = substr($word, 0, -4);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // IBLE
+        if (str_ends_with($word, 'ible')) {
+            $stem = substr($word, 0, -4);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ANT
+        if (str_ends_with($word, 'ant')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // EMENT
+        if (str_ends_with($word, 'ement')) {
+            $stem = substr($word, 0, -5);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // MENT
+        if (str_ends_with($word, 'ment')) {
+            $stem = substr($word, 0, -4);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ENT
+        if (str_ends_with($word, 'ent')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // OU
+        if (str_ends_with($word, 'ou')) {
+            $stem = substr($word, 0, -2);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ISM
+        if (str_ends_with($word, 'ism')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ATE
+        if (str_ends_with($word, 'ate')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ITI
+        if (str_ends_with($word, 'iti')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // OUS
+        if (str_ends_with($word, 'ous')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // IVE
+        if (str_ends_with($word, 'ive')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // IZE
+        if (str_ends_with($word, 'ize')) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1) {
+                return $stem;
+            }
+        }
+
+        // ION
         if (str_ends_with($word, 'ion')) {
-            $stem = mb_substr($word, 0, -3);
-            if (self::measure($stem) > 1 && in_array(mb_substr($stem, -1), ['s', 't'])) {
+            $stem = substr($word, 0, -3);
+            if (self::measureWord($stem) > 1 &&
+                (str_ends_with($stem, 's') || str_ends_with($stem, 't'))) {
                 return $stem;
             }
         }
@@ -298,20 +530,40 @@ final class StemWord
         return $word;
     }
 
-    private static function step5(string $word): string
+    /**
+     * Step 5a: Handle final -e
+     */
+    private static function step5a(string $word): string
     {
-        if (str_ends_with($word, 'e')) {
-            $stem = mb_substr($word, 0, -1);
-            $measure = self::measure($stem);
-            if ($measure > 1 || ($measure === 1 && !self::cvc($stem))) {
-                return $stem;
-            }
+        if (!str_ends_with($word, 'e')) {
+            return $word;
         }
 
-        if (str_ends_with($word, 'l') && self::doubleConsonant($word) && self::measure($word) > 1) {
-            return mb_substr($word, 0, -1);
+        $stem = substr($word, 0, -1);
+        $measure = self::measureWord($stem);
+
+        // Remove if measure > 1 or (measure == 1 and not *o)
+        if ($measure > 1) {
+            return $stem;
         }
 
+        if ($measure === 1 && !self::endsCvc($stem)) {
+            return $stem;
+        }
+
+        return $word;
+    }
+
+    /**
+     * Step 5b: Handle final -ll
+     */
+    private static function step5b(string $word): string
+    {
+        if (self::measureWord($word) > 1 &&
+            self::endsDoubleConsonant($word) &&
+            str_ends_with($word, 'l')) {
+            return substr($word, 0, -1);
+        }
         return $word;
     }
 }
