@@ -1,0 +1,29 @@
+{
+    "name": "karelwintersky/arris.toolkit.emoji-finder",
+    "description": "A PHP emoji search engine optimized for search-as-you-type experience",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "karelwintersky",
+            "email": "karel@wintersky.ru"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Arris\\Toolkit\\EmojiFinder\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Arris\\Toolkit\\EmojiFinder\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
+    "minimum-stability": "stable",
+    "scripts": {
+        "test": "phpunit"
+    }
+}
