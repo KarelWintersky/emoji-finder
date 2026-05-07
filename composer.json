@@ -25,5 +25,8 @@
     "minimum-stability": "stable",
     "scripts": {
         "test": "phpunit"
+    },
+    "require": {
+        "ext-mbstring": "*"
     }
 }
